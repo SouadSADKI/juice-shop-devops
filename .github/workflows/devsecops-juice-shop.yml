@@ -15,11 +15,6 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v3
 
-      - name: Install Docker on Windows
-        run: |
-          Start-Service docker
-          docker --version
-
       - name: Build Juice Shop Docker Image
         run: docker build -t juice-shop:latest .
 
@@ -29,16 +24,16 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v3
 
-      - name: Run Semgrep for SAST
+      - name: Install Semgrep for SAST
         shell: bash
         run: |
           pip install semgrep
-          semgrep --config p/security-audit --output semgrep.sarif
+          semgrep --config p/security-audit --output semgrep-report.sarif
 
       - name: Upload Semgrep Report
         uses: github/codeql-action/upload-sarif@v2
         with:
-          sarif_file: semgrep.sarif
+          sarif_file: semgrep-report.sarif
 
   sca:
     runs-on: windows-latest
@@ -46,13 +41,60 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v3
 
-      - name: Install OWASP Dependency-Check
+      - name: Download Dependency-Check
         run: |
           curl -LO https://github.com/jeremylong/DependencyCheck/releases/download/v7.0.4/dependency-check-7.0.4-release.zip
           Expand-Archive -Path dependency-check-7.0.4-release.zip -DestinationPath dependency-check
 
-      - name: Run OWASP Dependency-Check for SCA
+      - name: Run OWASP Dependency-Check
         run: |
           dependency-check\bin\dependency-check.bat --scan . --format HTML --out dependency-check-report.html
 
-      - name: U
+      - name: Upload Dependency-Check Report
+        uses: actions/upload-artifact@v3
+        with:
+          name: dependency-check-report
+          path: dependency-check-report.html
+
+  container_scan:
+    runs-on: windows-latest
+    steps:
+      - name: Build Juice Shop Docker Image
+        run: docker build -t juice-shop:latest .
+
+      - name: Install Trivy for Container Scanning
+        shell: bash
+        run: |
+          curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh
+
+      - name: Run Trivy Container Scan
+        run: trivy image --format table --output trivy-report.txt juice-shop:latest
+
+      - name: Upload Trivy Report
+        uses: actions/upload-artifact@v3
+        with:
+          name: trivy-report
+          path: trivy-report.txt
+
+  dast:
+    runs-on: windows-latest
+    services:
+      juice-shop:
+        image: juice-shop/juice-shop
+        options: --health-cmd="curl -f http://localhost:3000 || exit 1" --health-interval=30s --health-timeout=10s --health-retries=5
+        ports:
+          - 3000:3000
+    steps:
+      - name: Install OWASP ZAP
+        run: choco install zap
+
+      - name: Run OWASP ZAP Baseline Scan
+        run: |
+          zap.bat -daemon -config api.disablekey=true
+          zap-baseline.py -t http://localhost:3000 -r zap-report.html || true
+
+      - name: Upload ZAP Report
+        uses: actions/upload-artifact@v3
+        with:
+          name: zap-report
+          path: zap-report.html
